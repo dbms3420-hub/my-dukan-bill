@@ -1,0 +1,95 @@
+name: Build & Release APK
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Flutter APK
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: flutter_grocery_billing
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Fix 1: Generate Gradle wrapper jar (required to run gradlew)
+      - name: Generate Gradle wrapper
+        run: |
+          cd android
+          gradle wrapper --gradle-version=8.3 --distribution-type=bin
+        working-directory: flutter_grocery_billing
+
+      # Fix 2: Create placeholder shop logo if user hasn't added one yet
+      - name: Create placeholder logo if missing
+        run: |
+          mkdir -p assets/images
+          if [ ! -f assets/images/shop_logo.png ]; then
+            convert -size 512x512 \
+              xc:"#2E7D32" \
+              -fill white \
+              -gravity Center \
+              -pointsize 120 \
+              -font DejaVu-Sans-Bold \
+              -annotate 0 "GB" \
+              assets/images/shop_logo.png
+            echo "Created placeholder logo"
+          else
+            echo "Using existing shop_logo.png"
+          fi
+
+      # Fix 3: Generate app icons into mipmap folders (was empty — build would fail)
+      - name: Generate app icons
+        run: flutter pub run flutter_launcher_icons
+
+      - name: Analyze code
+        run: flutter analyze --no-fatal-warnings
+
+      - name: Build Release APK
+        run: flutter build apk --release --no-tree-shake-icons
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: grocery-billing-apk
+          path: flutter_grocery_billing/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: flutter_grocery_billing/build/app/outputs/flutter-apk/app-release.apk
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## Grocery Billing App ${{ github.ref_name }}
+
+            ### How to install
+            1. Download `app-release.apk` below
+            2. On your Android phone: Settings → Security → Allow unknown sources
+            3. Open the APK file and tap Install
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
